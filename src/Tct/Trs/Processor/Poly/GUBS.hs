@@ -31,15 +31,15 @@ import qualified Tct.Core.Data                       as T
 import qualified Tct.Common.Polynomial               as P
 import qualified Tct.Common.PolynomialInterpretation as PI
 import           Tct.Common.ProofCombinators         (ApplicationProof (..), OrientationProof (..))
-import           Tct.Common.Ring                     (Additive, SemiRing, add, sub)
+import           Tct.Common.Ring                     (Additive, SemiRing, add, sub, zero)
 
 import           Tct.Trs
 import           Tct.Trs.Data
 import qualified Tct.Trs.Data.Problem                as Prob
 import qualified Tct.Trs.Data.ProblemKind            as Prob
-import qualified Tct.Trs.Data.Rules                  as RS (member, toList, vars)
+import qualified Tct.Trs.Data.Rules                  as RS (member, toList, funs)
 import qualified Tct.Trs.Data.Signature              as Sig
-import           Tct.Trs.Data.Symbol                 (var)
+import           Tct.Trs.Data.Symbol                 (fun, var)
 import qualified Tct.Trs.Encoding.Interpretation     as I
 import           Tct.Trs.Encoding.UsablePositions    (usableArgsWhereApplicable, usablePositionsOf)
 import           Tct.Trs.Processors                  (Degree, degreeArg)
@@ -52,11 +52,11 @@ data NaturalPI = NaturalPI
   , selector :: Selector
   } deriving Show
 
-data Selector = Any | All | First
+data Selector = All | Any | One
   deriving (Bounded, Enum, Eq, Show)
 
 selectorArg :: T.Argument 'T.Required Selector
-selectorArg = T.flag "orientRules" [ "This argument specifies which rules to orient Strictly  "]
+selectorArg = T.flag "selector" [ "This argument specifies which rules to orient Strictly  "]
 
 type Kind = PI.Kind F
 
@@ -73,6 +73,10 @@ certification order cert = case cert of
   T.Opt (T.Id c) -> T.updateTimeUBCert c (`add` bound)
   where bound = PI.bound (kind_ order) (PI.PolyInter . I.interpretations . I.inter_ $ pint_ order)
 
+-- certification :: PolyOrder Int -> T.Id T.Certificate -> T.Certificate
+-- certification order (T.Id c) = T.updateTimeUBCert c (`add` bound)
+--   where bound = PI.bound (kind_ order) (PI.PolyInter . I.interpretations . I.inter_ $ pint_ order)
+
 restricted :: Problem f v -> Sig.Symbols f
 restricted prob = case Prob.startTerms prob of {Prob.BasicTerms{Prob.constructors=cs} -> cs; _ -> S.empty}
 
@@ -86,15 +90,23 @@ canonicalVar' = var . ("_x" <>) . show
 canonicalVar :: Int -> G.Term f V
 canonicalVar = G.Var . canonicalVar'
 
-fresh :: State ([G.Term f V],[V]) (G.Term f V)
-fresh = do
-  (vs,i:is) <- get
-  let v = G.Var i
-  put (v:vs,is)
-  return v
+canonicalFun' :: Int -> F
+canonicalFun' = fun . ("_f" <>) . show
 
-withFreshVars :: S.Set V -> State ([G.Term f V], [V]) a -> (a, [G.Term f V])
-withFreshVars vars m = fst <$> runState m ([], filter (`S.member` vars) $ canonicalVar' `fmap` [1..])
+-- canonicalFun :: Int -> G.Term F V
+-- canonicalFun i j = G.Fun (canonicalFun' i) []
+
+fresh :: State ([G.Term F V],[F]) (G.Term F V)
+fresh = do
+  (cs,f:fs) <- get
+  let c = G.Fun f []
+  put (c:cs,fs)
+  return c
+
+withFreshFuns :: S.Set F -> State ([G.Term F v], [F]) a -> (a, [G.Term F v])
+withFreshFuns funs m = fst <$> runState m ([], funs')
+  where funs' = filter (`S.notMember` funs) $ canonicalFun' `fmap` [1..]
+
 
 canonicalTerm :: (f,Int) -> G.Term f V
 canonicalTerm (f,ar)= G.Fun f $ canonicalVar `fmap` [1..ar]
@@ -105,13 +117,17 @@ encodeTerm (R.Var v)    = G.Var v
 
 -- | Constraint encoding for Polynomial Interpretations, where
 -- montonicity: f(x1,...,xn)  >= sum (upos(f))
--- restricted:  x1,...,xn + k >= f(x1,...,xn), for some (currently) fixed k
+-- restricted:  x1,...,xn + k >= f(x1,...,xn)
+--
+-- Any:
+-- l_i >= r_i + k_i
+-- sum(k_i) >= 0
 encode :: NaturalPI -> Problem F V -> G.ConstraintSystem F V
 encode p prob =
   orientStrs strs
   <> orientWeakly `fmap` wtrs
   <> monotone `fmap` fs
-  <> stronglyLinear `fmap` cs
+  <> stronglyLinear cs
 
   where
 
@@ -121,35 +137,36 @@ encode p prob =
   sig  = Prob.signature prob
   fs   = Sig.elems sig
   cs   = Sig.elems $ Sig.restrictSignature sig (restricted prob)
-  vars = RS.vars (Prob.allComponents prob)
+  funs = RS.funs (Prob.allComponents prob)
 
   orientStrs rs = case selector p of
     All   -> orientStrictly `fmap` rs
-    Any   -> (sum vs :>=: 1) :cs
-       where (cs,vs) = withFreshVars vars (forM rs orientStrictlyM)
-    First -> if null rs then [] else orientStrictly (head rs) : fmap orientWeakly (tail rs)
+    Any   -> (sum fs :>=: 1) :cs
+       where (cs,fs) = withFreshFuns funs (forM rs orientStrictlyM)
+    One -> if null rs then [] else orientStrictly (head rs) : fmap orientWeakly (tail rs)
 
   orientStrictlyM R.Rule{R.lhs=l,R.rhs=r} = fresh >>= \v -> return $ encodeTerm l :>=: encodeTerm r + v
   orientStrictly  R.Rule{R.lhs=l,R.rhs=r} = encodeTerm l :>=: encodeTerm r + 1
   orientWeakly    R.Rule{R.lhs=l,R.rhs=r} = encodeTerm l :>=: encodeTerm r
 
-  monotone (f,i)       = canonicalTerm (f,i) :>=: sum (canonicalVar `fmap` upos f)
-  stronglyLinear (f,i) = sum (canonicalVar `fmap` [1..i]) + 16 :>=: canonicalTerm (f,i) -- FIXME: MS: use fresh var
+  monotone (f,i)        = canonicalTerm (f,i) :>=: sum (canonicalVar `fmap` upos f)
+  stronglyLinear cs     = fst $ withFreshFuns funs (forM cs stronglyLinearM)
+  stronglyLinearM (f,i) = fresh >>= \v -> return $ sum (canonicalVar `fmap` [1..i]) + v :>=: canonicalTerm (f,i)
 
 
 --- * decode ---------------------------------------------------------------------------------------------------------
 -- translate the result back to Tct
 
 fromGPolynomial :: G.Polynomial G.Var Integer -> P.Polynomial Int PI.SomeIndeterminate
-fromGPolynomial p = P.fromView $ k `fmap` G.toMonos p
-  where k (c,m) = (fromIntegral c, (\(G.V v, i) -> (toEnum v,i)) <$> G.toPowers m)
+fromGPolynomial p = P.fromView  [ (fromIntegral c, k `fmap` ps) | (c,m) <- G.toMonos p, let ps = G.toPowers m ]
+  where k (G.V v,i) = (toEnum v, i)
 
 fromGInterpretation :: G.Interpretation f Integer -> I.Interpretation f (P.Polynomial Int PI.SomeIndeterminate)
 fromGInterpretation (G.Inter m) = I.Interpretation $ M.map fromGPolynomial $ M.mapKeysMonotonic fst m
 
 interpretf :: (Show c, Show fun, SemiRing c, Eq c, Ord fun, Ord var) => I.Interpretation fun (PI.SomePolynomial c) -> R.Term fun var -> P.Polynomial c var
 interpretf ebsi = I.interpretTerm interpretFun interpretVar where
-  interpretFun f = P.substituteVariables (I.interpretations ebsi `k` f) . M.fromList . zip PI.indeterminates
+  interpretFun f = P.substituteVariables (I.interpretations ebsi `k` f) . M.fromList . zip (toEnum `fmap` [0..])
     where k m g = error ("NaturalPI.interpretf: " ++ show g) `fromMaybe` M.lookup g m
   interpretVar   = P.variable
 
@@ -161,7 +178,7 @@ decode prob ginter =
     , I.uargs_     = usableArgsWhereApplicable prob (Prob.isDTProblem prob) True
     , I.ufuns_     = Nothing
     , I.useURules_ = False
-    , I.shift_     = I.All
+    , I.shift_     = I.All -- FIXME: MS: translate correctly for for newProblem
     , I.strictDPs_ = sDPs
     , I.strictTrs_ = sTrs
     , I.weakDPs_   = wDPs
@@ -195,8 +212,9 @@ instance T.Processor GUBS where
   type Forking GUBS     = T.Optional T.Id
 
   execute p prob
-    | Prob.isTrivial prob = T.abortWith (Closed :: ApplicationProof NaturalPIProof)
+    | Prob.isTrivial prob = T.succeedWith Closed (const zero) T.Null
     | otherwise           = entscheide p prob
+
 
 entscheide GUBS{naturalPI=naturalPI,processor=processor} prob = do
    res <- G.solveWith (encode naturalPI prob) processor
@@ -205,14 +223,16 @@ entscheide GUBS{naturalPI=naturalPI,processor=processor} prob = do
       T.succeedWith
         (Applicable GUBSProof{naturalPIProof=Order order,executionLog=l})
         (certification order)
-        (I.newProblem prob (pint_ order))
+        (T.Opt $ T.Id $ I.newProblem' prob (pint_ order))
       where
         order = PolyOrder{kind_=kind, pint_=pint}
         pint = decode prob i
         sig = Prob.signature prob
+        err = error "Kind: not defined" -- FIXME: MS: PI.bound gets Kind but does not use it
         kind  = case Prob.startTerms prob of
-          Prob.AllTerms{}                       -> PI.Unrestricted     undefined
-          Prob.BasicTerms{Prob.constructors=cs} -> PI.ConstructorBased undefined (Sig.constructors sig)
+          Prob.AllTerms{}                       -> PI.Unrestricted     err
+          Prob.BasicTerms{Prob.constructors=cs} -> PI.ConstructorBased err (Sig.constructors sig)
+    (G.Open _ _,l) -> T.abortWith $ drawTree (Node "Executionlog" l)
 
     _ -> T.abortWith "Incompatible"
 
@@ -227,21 +247,25 @@ defaultSMTOpts fs = G.SMTOpts
   , G.restrict = fs
   , G.maxCoeff = Nothing
   , G.maxConst = Nothing
-  , G.minimize = False}
+  -- , G.minimize = False}
+  , G.minimize = True }
 
 gubs' :: Trs -> Degree -> Selector -> TrsStrategy
 gubs' prob deg sl = T.Apply GUBS{naturalPI=naturalPI, processor=processor} where
 
   naturalPI = NaturalPI{degree=deg,selector=sl}
 
+  tof fp cs     = G.csToFile cs fp >> return (G.Progress cs)
   logCS cs      = G.logOpenConstraints cs >> return (G.Progress cs)
   logStr str cs = G.logMsg str >> return (G.Progress cs)
-  logSMT opts = logStr $ strongly <> shape <> "interpretation" <> degree where
+
+  logSMT opts   = logStr $ "SMT: trying " <> strongly <> shape <> " interpretation" <> degree where
     strongly = if G.maxConst opts == Just 1 then "strongly " else ""
     shape    = if G.degree opts == 1 then "linear" else case G.shape opts of {G.MultMixed -> "multmixed"; G.Mixed -> "mixed"}
     degree   = if G.degree opts >  2 then " of degree " ++ show (G.degree opts) else ""
 
   processor =
+    -- tof "/tmp/jones1.cs" ==>
     logCS ==> G.try simplify ==> logCS ==> G.try (G.exhaustive (G.sccDecompose (logCS ==> G.try simplify ==> simple (candidates deg))))
       where
         opts = defaultSMTOpts (S.elems $ restricted prob)
@@ -256,7 +280,7 @@ gubs' prob deg sl = T.Apply GUBS{naturalPI=naturalPI, processor=processor} where
           | deg <= 1  = basics
           | otherwise = basics <> [stronglyMultMixed 2] <> extras deg
 
-        basics     = [ stronglyMultMixed 1, multMixed 1, stronglyMultMixed 2 ]
+        basics     = [ stronglyMultMixed 1, multMixed 1 ]
         extras deg = foldr (\d xs -> multMixed d :stronglyMultMixed d :xs) [] [2..deg]
         simplify =
           G.try G.instantiate
@@ -265,7 +289,6 @@ gubs' prob deg sl = T.Apply GUBS{naturalPI=naturalPI, processor=processor} where
 
 gubs :: Degree -> Selector -> TrsStrategy
 gubs sh sel = T.withProblem $ \prob -> gubs' prob sh sel
-
 
 gubsDeclaration :: T.Declaration(
   '[ T.Argument 'T.Optional Degree
@@ -286,8 +309,7 @@ instance Show GUBS where
 
 instance PP.Pretty (PolyOrder Int) where
   pretty order = PP.vcat
-    [ PP.text "We apply a polynomial interpretation of kind " <> PP.pretty (kind_ order) <> PP.char ':'
-    , PP.pretty $ PP.pretty (pint_ order) ]
+    [ PP.pretty $ PP.pretty (pint_ order) ]
 
 instance Xml.Xml (PolyOrder Int) where
   toXml order = I.xmlProof (pint_ order) xtype where
@@ -301,8 +323,8 @@ instance Show GUBSProof where
 
 instance PP.Pretty GUBSProof where
   pretty GUBSProof{naturalPIProof=npi,executionLog=log} = PP.vcat
-    [ PP.pretty npi
-    , PP.text $ drawTree (Node "Executionlog" log)]
+    [ PP.pretty npi ]
+    -- , PP.text $ drawTree (Node "Executionlog" log)]
 
 instance Xml.Xml GUBSProof where
   toXml GUBSProof{naturalPIProof=npi} = Xml.toXml npi
