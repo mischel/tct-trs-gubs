@@ -1,0 +1,38 @@
+packages:
+  - '.'
+  - location:
+      git: https://github.com/ComputationWithBoundedResources/slogic
+      commit: b5f1738b17637923318e793d68fdccb69749a0b8
+  - location:
+      git: https://github.com/ComputationWithBoundedResources/term-rewriting-xml
+      commit: 36519d14d28b4f3a429d57ae1b8cac2e7d7c4214
+  - location:
+      git: https://github.com/ComputationWithBoundedResources/tct-core
+      commit: 6704baf6902fe306bd47ade31f1adb1dc001ef4a
+  - location:
+      git: https://github.com/ComputationWithBoundedResources/tct-common
+      commit: f950378c5ba414f5f02916046ddcb4af4ec6fb19
+  - location:
+      git: https://github.com/ComputationWithBoundedResources/tct-trs
+      commit: c1fc279f54cf16d620a2a67e659174e3c1f22566
+  - location:
+      git: https://github.com/ComputationWithBoundedResources/tct-its
+      commit: 9eb5a4758789f3739e6cb788e468579cfe3ed4d1
+  - location:
+      git: https://github.com/mischel/gubs
+      commit: 2a6e23f09a887aabb471e587bf5985fbd555933c
+  - location:
+      git: https://github.com/mzini/monad-trace
+      commit: b75ce1b391cbdd14917feeee95166d55bef5c823
+extra-deps:
+  - dotgen-0.4.2
+  - fgl-visualize-0.1.0.1
+  - multiset-0.3.3
+  - term-rewriting-0.2
+  - union-find-array-0.1.0.2
+  - smtlib2-0.3.1
+  - atto-lisp-0.2.2.2
+  - data-fix-0.0.3
+resolver: 
+  lts-5.10
+allow-newer: true

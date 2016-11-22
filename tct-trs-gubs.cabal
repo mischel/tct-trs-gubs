@@ -1,0 +1,36 @@
+name:                tct-trs-gubs
+version:             0.0.0.0
+synopsis:            Polynomial Interpretations with GUBS
+description:         Please see README.md
+homepage:            https://github.com/mischel/tct-trs-gubs#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Michael Schaper
+maintainer:          michael.schaper@uibk.ac.at
+copyright:           2016 Michael Schaper
+category:            Logic
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     
+    Tct.Trs.Processor.Poly.GUBS
+  build-depends:       
+    base >= 4.7 && < 5, containers, mtl,
+    gubs,
+    term-rewriting,
+    tct-trs, tct-core, tct-common
+  default-language:    Haskell2010
+  default-extensions:
+    DataKinds,
+    FlexibleContexts,
+    FlexibleInstances,
+    TypeFamilies,
+    TypeOperators
+
+source-repository head
+  type:     git
+  location: https://github.com/mischel/tct-trs-gubs
+
