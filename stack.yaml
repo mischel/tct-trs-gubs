@@ -19,11 +19,11 @@ packages:
       git: https://github.com/ComputationWithBoundedResources/tct-its
       commit: 9eb5a4758789f3739e6cb788e468579cfe3ed4d1
   - location:
-      git: https://github.com/mischel/gubs
-      commit: 2a6e23f09a887aabb471e587bf5985fbd555933c
-  - location:
       git: https://github.com/mzini/monad-trace
       commit: b75ce1b391cbdd14917feeee95166d55bef5c823
+  - location:
+      git: https://github.com/mischel/gubs
+      commit: ad0a6a5bdb9cb8f336f7349269562c01d10a0aa5
 extra-deps:
   - dotgen-0.4.2
   - fgl-visualize-0.1.0.1
@@ -36,3 +36,6 @@ extra-deps:
 resolver: 
   lts-5.10
 allow-newer: true
+nix:
+  enable: true
+  pure: false
