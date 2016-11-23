@@ -323,8 +323,8 @@ instance Show GUBSProof where
 
 instance PP.Pretty GUBSProof where
   pretty GUBSProof{naturalPIProof=npi,executionLog=log} = PP.vcat
-    [ PP.pretty npi ]
-    -- , PP.text $ drawTree (Node "Executionlog" log)]
+    [ PP.pretty npi
+    , PP.text $ drawTree (Node "Executionlog" log)]
 
 instance Xml.Xml GUBSProof where
   toXml GUBSProof{naturalPIProof=npi} = Xml.toXml npi
