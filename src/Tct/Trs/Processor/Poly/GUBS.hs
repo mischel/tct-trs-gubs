@@ -279,28 +279,28 @@ gubs' gubsOptions@GUBSOptions{..} prob = T.Apply GUBS{gubsOptions, processor} wh
     shape    = if G.degree opts == 1 then "linear" else case G.shape opts of {G.MultMixed -> "multmixed"; G.Mixed -> "mixed"}
     degree   = if G.degree opts >  2 then " of degree " ++ show (G.degree opts) else ""
 
-  processor =
-    -- tof "/tmp/jones1.cs" ==>
-    logCS ==> G.try simplify ==> logCS ==> G.try (G.exhaustive (G.sccDecompose (logCS ==> G.try simplify ==> simple (candidates degree))))
-      where
-        opts = defaultSMTOpts (S.elems $ restricted prob)
-        smt' = G.smt G.Z3
-        stronglyMultMixed d = opts { G.degree = d, G.shape = G.MultMixed, G.maxCoeff = Just 1}
-        multMixed d         = opts { G.degree = d, G.shape = G.MultMixed, G.maxCoeff = Nothing}
-        mixed d             = opts { G.degree = d, G.shape = G.Mixed    , G.maxCoeff = Nothing}
+  processor = logCS ==> G.try simplify ==> logCS ==> G.try (G.exhaustive (withSCC (logCS ==> G.try simplify ==> simple (candidates degree)))) where
 
-        simple    = foldr (\s -> (==>) (logSMT s ==> G.try (smt' s))) logCS
+    withSCC p = case scc of {SCC -> G.sccDecompose p; NoSCC -> p}
 
-        candidates deg
-          | deg <= 1  = basics
-          | otherwise = basics <> [stronglyMultMixed 2] <> extras deg
+    opts = defaultSMTOpts (S.elems $ restricted prob)
+    smt' = G.smt $ case smtSolver of {Z3 -> G.Z3; MiniSmt -> G.MiniSmt}
+    stronglyMultMixed d = opts { G.degree = d, G.shape = G.MultMixed, G.maxCoeff = Just 1}
+    multMixed d         = opts { G.degree = d, G.shape = G.MultMixed, G.maxCoeff = Nothing}
+    mixed d             = opts { G.degree = d, G.shape = G.Mixed    , G.maxCoeff = Nothing}
 
-        basics     = [ stronglyMultMixed 1, multMixed 1 ]
-        extras deg = foldr (\d xs -> multMixed d :stronglyMultMixed d :xs) [] [2..deg]
-        simplify =
-          G.try G.instantiate
-          ==> G.try G.propagateEq
-          ==> G.try (G.exhaustive (G.propagateUp <=> G.propagateDown))
+    simple    = foldr (\s -> (==>) (logSMT s ==> G.try (smt' s))) logCS
+
+    candidates deg
+      | deg <= 1  = basics
+      | otherwise = basics <> [stronglyMultMixed 2] <> extras deg
+
+    basics     = [ stronglyMultMixed 1, multMixed 1 ]
+    extras deg = foldr (\d xs -> multMixed d :mixed d :xs) [] [2..deg]
+    simplify =
+      G.try G.instantiate
+      ==> G.try G.propagateEq
+      ==> G.try (G.exhaustive (G.propagateUp <=> G.propagateDown))
 
 gubs :: GUBSOptions -> TrsStrategy
 gubs opts = tew $ T.withProblem $ \prob ->  gubs' opts prob
