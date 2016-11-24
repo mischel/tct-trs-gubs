@@ -1,25 +1,25 @@
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
 module Tct.Trs.Processor.Poly.GUBS
-  ( gubs
-  , gubsDeclaration
-  , Selector (..)
-  , selectorArg )
+  -- ( gubs
+  -- , gubsDeclaration
+  -- , Selector (..)
+  -- , selectorArg )
 where
 
 
 --- * imports --------------------------------------------------------------------------------------------------------
 
-import qualified Data.List                           as L (partition, (\\))
+import qualified Data.List                           as L (partition)
 import qualified Data.Map.Strict                     as M
 import           Data.Maybe                          (fromMaybe)
 import           Data.Monoid                         ((<>))
 import qualified Data.Set                            as S
 import           Data.Tree                           (Tree (..), drawTree)
 
-import           Control.Monad                       (forM)
 import           Control.Monad.State.Strict
 
 import qualified Data.Rewriting.Rule                 as R
-import qualified Data.Rewriting.Term                 as R
 
 import           GUBS                                as G (Constraint (..), (<=>), (==>))
 import qualified GUBS                                as G
@@ -31,10 +31,9 @@ import qualified Tct.Core.Data                       as T
 import qualified Tct.Common.Polynomial               as P
 import qualified Tct.Common.PolynomialInterpretation as PI
 import           Tct.Common.ProofCombinators         (ApplicationProof (..), OrientationProof (..))
-import           Tct.Common.Ring                     (Additive, SemiRing, add, sub, zero)
+import           Tct.Common.Ring                     (SemiRing, add, sub, zero)
 
 import           Tct.Trs
-import           Tct.Trs.Data
 import qualified Tct.Trs.Data.Problem                as Prob
 import qualified Tct.Trs.Data.ProblemKind            as Prob
 import qualified Tct.Trs.Data.Rules                  as RS (member, toList, funs)
@@ -42,15 +41,10 @@ import qualified Tct.Trs.Data.Signature              as Sig
 import           Tct.Trs.Data.Symbol                 (fun, var)
 import qualified Tct.Trs.Encoding.Interpretation     as I
 import           Tct.Trs.Encoding.UsablePositions    (usableArgsWhereApplicable, usablePositionsOf)
-import           Tct.Trs.Processors                  (Degree, degreeArg)
+import           Tct.Trs.Processors                  (Degree)
 
 
 --- * NaturalPI ------------------------------------------------------------------------------------------------------
-
-data NaturalPI = NaturalPI
-  { degree   :: Degree
-  , selector :: Selector
-  } deriving Show
 
 data Selector = All | Any | One
   deriving (Bounded, Enum, Eq, Show)
@@ -122,8 +116,8 @@ encodeTerm (R.Var v)    = G.Var v
 -- Any:
 -- l_i >= r_i + k_i
 -- sum(k_i) >= 0
-encode :: NaturalPI -> Problem F V -> G.ConstraintSystem F V
-encode p prob =
+encode :: Selector -> Problem F V -> G.ConstraintSystem F V
+encode selector prob =
   orientStrs strs
   <> orientWeakly `fmap` wtrs
   <> monotone `fmap` fs
@@ -139,7 +133,7 @@ encode p prob =
   cs   = Sig.elems $ Sig.restrictSignature sig (restricted prob)
   funs = RS.funs (Prob.allComponents prob)
 
-  orientStrs rs = case selector p of
+  orientStrs rs = case selector of
     All   -> orientStrictly `fmap` rs
     Any   -> (sum fs :>=: 1) :cs
        where (cs,fs) = withFreshFuns funs (forM rs orientStrictlyM)
@@ -197,9 +191,32 @@ decode prob ginter =
 
 type GUBSProcessor = (G.Processor F Integer V T.TctM)
 
+data SMTSolver = MiniSmt | Z3 deriving (Show, Bounded, Enum)
+
+data SCC = SCC | NoSCC deriving (Show, Bounded, Enum)
+
+data Minimize = Minimize | NoMinimize deriving (Show, Bounded, Enum)
+
+data GUBSOptions = GUBSOptions
+  { selector  :: Selector
+  , degree    :: Degree
+  , scc       :: SCC
+  , smtSolver :: SMTSolver
+  , minimize  :: Minimize }
+  deriving Show
+
+defaultGUBSOptions :: GUBSOptions
+defaultGUBSOptions = GUBSOptions{..} where
+  selector  = One
+  degree    = 4
+  scc       = SCC
+  smtSolver = Z3
+  minimize  = Minimize
+
+
 data GUBS = GUBS
-  { naturalPI :: NaturalPI
-  , processor :: GUBSProcessor }
+  { gubsOptions :: GUBSOptions
+  , processor   :: GUBSProcessor }
 
 data GUBSProof = GUBSProof
   { naturalPIProof :: NaturalPIProof
@@ -216,8 +233,8 @@ instance T.Processor GUBS where
     | otherwise           = entscheide p prob
 
 
-entscheide GUBS{naturalPI=naturalPI,processor=processor} prob = do
-   res <- G.solveWith (encode naturalPI prob) processor
+entscheide GUBS{gubsOptions=GUBSOptions{..},..} prob = do
+   res <- G.solveWith (encode selector prob) processor
    case res of
     (G.Sat i,l) ->
       T.succeedWith
@@ -250,10 +267,8 @@ defaultSMTOpts fs = G.SMTOpts
   -- , G.minimize = False}
   , G.minimize = True }
 
-gubs' :: Trs -> Degree -> Selector -> TrsStrategy
-gubs' prob deg sl = T.Apply GUBS{naturalPI=naturalPI, processor=processor} where
-
-  naturalPI = NaturalPI{degree=deg,selector=sl}
+gubs' :: GUBSOptions -> Trs -> TrsStrategy
+gubs' gubsOptions@GUBSOptions{..} prob = T.Apply GUBS{gubsOptions, processor} where
 
   tof fp cs     = G.csToFile cs fp >> return (G.Progress cs)
   logCS cs      = G.logOpenConstraints cs >> return (G.Progress cs)
@@ -266,7 +281,7 @@ gubs' prob deg sl = T.Apply GUBS{naturalPI=naturalPI, processor=processor} where
 
   processor =
     -- tof "/tmp/jones1.cs" ==>
-    logCS ==> G.try simplify ==> logCS ==> G.try (G.exhaustive (G.sccDecompose (logCS ==> G.try simplify ==> simple (candidates deg))))
+    logCS ==> G.try simplify ==> logCS ==> G.try (G.exhaustive (G.sccDecompose (logCS ==> G.try simplify ==> simple (candidates degree))))
       where
         opts = defaultSMTOpts (S.elems $ restricted prob)
         smt' = G.smt G.Z3
@@ -287,25 +302,25 @@ gubs' prob deg sl = T.Apply GUBS{naturalPI=naturalPI, processor=processor} where
           ==> G.try G.propagateEq
           ==> G.try (G.exhaustive (G.propagateUp <=> G.propagateDown))
 
-gubs :: Degree -> Selector -> TrsStrategy
-gubs sh sel = T.withProblem $ \prob -> gubs' prob sh sel
+gubs :: GUBSOptions -> TrsStrategy
+gubs opts = tew $ T.withProblem $ \prob ->  gubs' opts prob
 
-gubsDeclaration :: T.Declaration(
-  '[ T.Argument 'T.Optional Degree
-   , T.Argument 'T.Optional Selector ]
-  T.:-> TrsStrategy)
-gubsDeclaration =
-  T.declare
-    "gubs"
-    [ "Polynomial Interpretations with GUBS" ]
-    ( degreeArg `T.optional` 3
-    , selectorArg `T.optional` All )
-    gubs
+-- gubsDeclaration :: T.Declaration(
+--   '[ T.Argument 'T.Optional Degree
+--    , T.Argument 'T.Optional Selector ]
+--   T.:-> TrsStrategy)
+-- gubsDeclaration =
+--   T.declare
+--     "gubs"
+--     [ "Polynomial Interpretations with GUBS" ]
+--     ( degreeArg `T.optional` 3
+--     , selectorArg `T.optional` All )
+--     gubs
 
 --- * proof data -----------------------------------------------------------------------------------------------------
 
 instance Show GUBS where
-  show = show . naturalPI
+  show = show .gubsOptions
 
 instance PP.Pretty (PolyOrder Int) where
   pretty order = PP.vcat
